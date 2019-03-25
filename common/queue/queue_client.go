@@ -7,6 +7,8 @@ import (
 	"github.com/streadway/amqp"
 )
 
+const exchangeDefault = "golang-gin-rabbitmq-test-exchangeDefault"
+
 // Defines our interface for connecting, producing and consuming messages.
 type IQueueClient interface {
 	ConnectToBroker(connectionString string)
@@ -25,7 +27,10 @@ func NewQueueClient(connectionString string) *queueClient {
 
 // Real implementation, encapsulates a pointer to an amqp.Connection
 type queueClient struct {
-	conn *amqp.Connection
+	conn    *amqp.Connection
+	channel *amqp.Channel
+	tag     string
+	done    chan error
 }
 
 func (m *queueClient) ConnectToBroker(connectionString string) {
@@ -72,11 +77,28 @@ func (m *queueClient) PublishOnQueue(queueName string, body []byte) error {
 }
 
 func (m *queueClient) SubscribeToQueue(queueName string, consumerName string, handlerFunc func(amqp.Delivery)) error {
-	ch, err := m.conn.Channel()
-	failOnError(err, "Failed to open a channel")
+	var err error
+	log.Printf("got Connection, getting Channel")
+	m.channel, err = m.conn.Channel()
+	if err != nil {
+		return err
+	}
 
-	log.Printf("Declaring Queue (%s)", queueName)
-	queue, err := ch.QueueDeclare(
+	log.Printf("got Channel, declaring Exchange (%s)", "direct")
+	if err = m.channel.ExchangeDeclare(
+		exchangeDefault, // name of the exchange
+		"direct",        // type flag.String("exchange-type", "direct", "Exchange type - direct|fanout|topic|x-custom")
+		false,           // durable
+		false,           // delete when complete
+		false,           // internal
+		false,           // noWait
+		nil,             // arguments
+	); err != nil {
+		return err
+	}
+
+	log.Printf("declared Exchange, declaring Queue (%s)", queueName)
+	state, err := m.channel.QueueDeclare(
 		queueName, // name of the queue
 		false,     // durable
 		false,     // delete when usused
@@ -84,26 +106,38 @@ func (m *queueClient) SubscribeToQueue(queueName string, consumerName string, ha
 		false,     // noWait
 		nil,       // arguments
 	)
-	failOnError(err, "Failed to register an Queue")
+	if err != nil {
+		return err
+	}
+	var key = queueName + exchangeDefault
+	log.Printf("declared Queue (%d messages, %d consumers), binding to Exchange (key '%s')",
+		state.Messages, state.Consumers, key)
 
-	err = ch.Qos(
-		1,     // prefetch count
-		0,     // prefetch size
-		false, // global
-	)
-	failOnError(err, "Failed to set QoS")
-
-	msgs, err := ch.Consume(
-		queue.Name,   // queue
-		consumerName, // consumer
-		true,         // auto-ack
+	if err = m.channel.QueueBind(
+		queueName,       // name of the queue
+		key,             // bindingKey
+		exchangeDefault, // sourceExchange
+		false,           // noWait
+		nil,             // arguments
+	); err != nil {
+		return err
+	}
+	m.channel.Qos(10, 0, false)
+	log.Printf("Queue bound to Exchange, starting Consume (consumer tag '%s')", "tagConsume")
+	deliveries, err := m.channel.Consume(
+		queueName,    // name
+		"tagConsume", // consumerTag,
+		false,        // noAck
 		false,        // exclusive
-		false,        // no-local
-		false,        // no-wait
-		nil,          // args
+		false,        // noLocal
+		false,        // noWait
+		nil,          // arguments
 	)
-	failOnError(err, "Failed to register a consumer")
-	go consumeLoop(msgs, handlerFunc)
+	if err != nil {
+		return err
+	}
+
+	go consumeLoop(deliveries, handlerFunc)
 	return nil
 }
 
@@ -117,6 +151,7 @@ func consumeLoop(deliveries <-chan amqp.Delivery, handlerFunc func(d amqp.Delive
 	for d := range deliveries {
 		// Invoke the handlerFunc func we passed as parameter.
 		handlerFunc(d)
+		d.Ack(true)
 	}
 }
 

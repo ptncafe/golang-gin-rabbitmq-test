@@ -12,7 +12,7 @@ var queueClient queue.IQueueClient
 func main() {
 	queueClient = queue.NewQueueClient("amqp://services:services@172.30.119.91:5672/")
 	subscribe := queueHandler.NewSubscribeQueue(queueClient)
-	subscribe.RegisterSubscribeQueue()
+	go subscribe.RegisterSubscribeQueue()
 	initGin()
 
 }
