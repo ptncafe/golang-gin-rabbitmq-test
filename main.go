@@ -22,6 +22,7 @@ func initGin() {
 	router(r)
 	r.Run() // listen and serve on 0.0.0.0:8080
 }
+
 func router(ginEngine *gin.Engine) {
 	queueController := controller.NewQueueController(queueClient)
 

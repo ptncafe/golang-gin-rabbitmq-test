@@ -69,8 +69,9 @@ func (m *queueClient) PublishOnQueue(queueName string, body []byte) error {
 		false,      // mandatory
 		false,      // immediate
 		amqp.Publishing{
-			ContentType: "application/json",
-			Body:        body, // Our JSON body as []byte
+			DeliveryMode: amqp.Persistent,
+			ContentType:  "application/json",
+			Body:         body, // Our JSON body as []byte
 		})
 	fmt.Printf("A message was sent to queue %v: %v", queueName, body)
 	return err
@@ -78,6 +79,7 @@ func (m *queueClient) PublishOnQueue(queueName string, body []byte) error {
 
 func (m *queueClient) SubscribeToQueue(queueName string, consumerName string, handlerFunc func(amqp.Delivery)) error {
 	var err error
+	done := make(chan bool)
 	log.Printf("got Connection, getting Channel")
 	m.channel, err = m.conn.Channel()
 	if err != nil {
@@ -127,7 +129,7 @@ func (m *queueClient) SubscribeToQueue(queueName string, consumerName string, ha
 	deliveries, err := m.channel.Consume(
 		queueName,    // name
 		"tagConsume", // consumerTag,
-		false,        // noAck
+		false,        //auto-ack or noack
 		false,        // exclusive
 		false,        // noLocal
 		false,        // noWait
@@ -137,21 +139,23 @@ func (m *queueClient) SubscribeToQueue(queueName string, consumerName string, ha
 		return err
 	}
 
-	go consumeLoop(deliveries, handlerFunc)
+	go func() {
+		msgCount := 0
+		for d := range deliveries {
+			fmt.Printf("\nMessage Count: %d, Message Body: %s\n", msgCount, d.Body)
+			msgCount++
+			handlerFunc(d)
+			d.Ack(false)
+		}
+		log.Printf("handle: deliveries channel closed")
+	}()
+	<-done
 	return nil
 }
 
 func (m *queueClient) Close() {
 	if m.conn != nil {
 		m.conn.Close()
-	}
-}
-
-func consumeLoop(deliveries <-chan amqp.Delivery, handlerFunc func(d amqp.Delivery)) {
-	for d := range deliveries {
-		// Invoke the handlerFunc func we passed as parameter.
-		handlerFunc(d)
-		d.Ack(true)
 	}
 }
 
