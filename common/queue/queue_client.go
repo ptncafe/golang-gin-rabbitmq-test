@@ -79,13 +79,12 @@ func (m *queueClient) PublishOnQueue(queueName string, body []byte) error {
 
 func (m *queueClient) SubscribeToQueue(queueName string, consumerName string, handlerFunc func(amqp.Delivery)) error {
 	var err error
-	done := make(chan bool)
 	log.Printf("got Connection, getting Channel")
 	m.channel, err = m.conn.Channel()
 	if err != nil {
 		return err
 	}
-
+	defer m.channel.Close()
 	log.Printf("got Channel, declaring Exchange (%s)", "direct")
 	if err = m.channel.ExchangeDeclare(
 		exchangeDefault, // name of the exchange
@@ -102,7 +101,7 @@ func (m *queueClient) SubscribeToQueue(queueName string, consumerName string, ha
 	log.Printf("declared Exchange, declaring Queue (%s)", queueName)
 	state, err := m.channel.QueueDeclare(
 		queueName, // name of the queue
-		false,     // durable
+		true,      // durable
 		false,     // delete when usused
 		false,     // exclusive
 		false,     // noWait
@@ -138,6 +137,8 @@ func (m *queueClient) SubscribeToQueue(queueName string, consumerName string, ha
 	if err != nil {
 		return err
 	}
+
+	done := make(chan bool)
 
 	go func() {
 		msgCount := 0
